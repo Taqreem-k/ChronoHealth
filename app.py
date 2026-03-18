@@ -1,6 +1,8 @@
 import streamlit as st
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_classic.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
 
 st.title("ChronoHealth")
 
@@ -25,3 +27,13 @@ if uploaded_files is not None:
     chunks = text_splitter.split_documents(pages)
 
     st.write(f"Document succesfully split into {len(chunks)} chunks.")
+
+    embeddings = HuggingFaceEmbeddings(model_name = "all-MiniLm-L6-v2")
+
+    vectorstore = Chroma.from_documents(
+        documents = chunks,
+        embedding = embeddings,
+        persist_directory="./chroma_db"
+    )
+
+    st.success("Health record successfully vectorized and sotred in the database!")
