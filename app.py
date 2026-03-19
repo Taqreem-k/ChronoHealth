@@ -3,6 +3,8 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_classic.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
+from typing import TypedDict
+from langchain_core.tools.retriever import create_retriever_tool
 
 st.title("ChronoHealth")
 
@@ -37,3 +39,17 @@ if uploaded_files is not None:
     )
 
     st.success("Health record successfully vectorized and sotred in the database!")
+
+    class AgentState(TypedDict):
+        query: str
+        context: str
+        clinical_brief: str
+        guardrail_passed: bool
+    
+    retriever = vectorstore.as_retriever()
+
+    retriever_tool = create_retriever_tool(
+        retriever,
+        name="patient_history_search",
+        description="Use this tool to search and retrieve the patient's medical history,past diagnoses, lab results and general health records.",
+    )
