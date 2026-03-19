@@ -11,3 +11,4 @@ wheels/
 
 temp.pdf
 chroma_db/
+.env
