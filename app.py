@@ -7,7 +7,7 @@ from typing import TypedDict
 from langchain_core.tools.retriever import create_retriever_tool
 from langchain_groq import ChatGroq
 from langgraph.graph import StateGraph, END
-from langgraph.prebuilt import ToolNode
+from langgraph.prebuilt import ToolNode, tools_condition
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -89,5 +89,10 @@ if uploaded_files is not None:
     workflow.add_node("tools", tool_executer)
 
     workflow.set_entry_point("drafter")
+
+    workflow.add_conditional_edges("drafter",tools_condition)
+    workflow.add_edge("tools","drafter")
+
+    app = workflow.compile()
 
 
