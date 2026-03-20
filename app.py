@@ -3,11 +3,13 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_classic.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-from typing import TypedDict
+from typing import TypedDict, Annotated
 from langchain_core.tools.retriever import create_retriever_tool
 from langchain_groq import ChatGroq
 from langgraph.graph import StateGraph, END
+from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
+from langchain_core.messages import SystemMessage
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -47,15 +49,14 @@ if uploaded_files is not None:
         persist_directory="./chroma_db"
     )
 
-    st.success("Health record successfully vectorized and sotred in the database!")
+    st.success("Health record successfully vectorized and stored in the database!")
 
     # Defining GraphState schema
     class AgentState(TypedDict):
-        query: str
+        messages: Annotated[list, add_messages]
         context: str
         clinical_brief: str
         guardrail_passed: bool
-        raw_message: any
     
     retriever = vectorstore.as_retriever()
 
@@ -72,17 +73,18 @@ if uploaded_files is not None:
 
     # Defining clinical brief based on user queries and retireved data
     def clinical_drafter(state: AgentState):
-        user_query = state["query"]
-        response = llm_with_tools.invoke(user_query)
+        system_message = SystemMessage(content="You are the ChronoHealth AI Assistant. You Must use the 'patient_history_search' tool to answer any questions about the user's uploaded document. Never answer from general knowledge.")
+        messages_to_pass = [system_message] + state["messages"]
+        response = llm_with_tools.invoke(messages_to_pass)
 
         return{
             "clinical_brief": response.content,
-            "raw_message": response,
+            "messages": [response],
         }
     
     tool_executer = ToolNode(tools=[retriever_tool])
 
-    # Initializing Graph
+    # Initializing Graph to add nodes and edges
     workflow = StateGraph(AgentState)
 
     workflow.add_node("drafter", clinical_drafter)
@@ -94,5 +96,18 @@ if uploaded_files is not None:
     workflow.add_edge("tools","drafter")
 
     app = workflow.compile()
+
+    # Definining user query
+    st.subheader("Query Patient Record")
+    user_question = st.text_input("Ask a question about the uploaded document: ")
+
+    if user_question:
+        with st.spinner("Agent is searching records and drafting brief..."):
+            initial_state = {"messages": [("user", user_question)]}
+
+            result = app.invoke(initial_state)
+            st.write("Final Clinical Brief")
+            st.write(result["clinical_brief"])
+
 
 
