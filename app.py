@@ -5,7 +5,7 @@ from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from typing import TypedDict, Annotated
 from langchain_core.tools.retriever import create_retriever_tool
-from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -58,7 +58,7 @@ if uploaded_files is not None:
         clinical_brief: str
         guardrail_passed: bool
     
-    retriever = vectorstore.as_retriever()
+    retriever = vectorstore.as_retriever(search_kwargs = {"k": 2})
 
     # Wrapping retirever in a Tool for LLM usage
     retriever_tool = create_retriever_tool(
@@ -68,8 +68,8 @@ if uploaded_files is not None:
     )
 
     # Defining LLMs
-    llm = ChatGroq(model_name = "llama-3.1-8b-instant")
-    reviewer_llm = ChatGroq(model_name = "llama-3.1-8b-instant")
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+    reviewer_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
     llm_with_tools = llm.bind_tools([retriever_tool])
 
 
@@ -79,15 +79,20 @@ if uploaded_files is not None:
         messages_to_pass = [system_message] + state["messages"]
         response = llm_with_tools.invoke(messages_to_pass)
 
+        if isinstance(response.content, list):
+            clean_text = response.content[0]["text"]
+        else:
+            clean_text = response.content
+
         return{
-            "clinical_brief": response.content,
+            "clinical_brief": clean_text,
             "messages": [response],
         }
     
     # Defining a guardrail checker to prevent hallucinations
     def compliance_checker(state: AgentState):
-        
-        new_system_message = SystemMessage(content=f"You are a medical compliance reviewer. Review this clinical brief. If it contains dangerous assumptions or diagnoses without evidence, reply ONLY with 'UNSAFE'. Otherwise, reply 'SAFE'. Brief:{state["clinical_brief"]}")
+        extracted_brief = state["clinical_brief"]
+        new_system_message = f"You are a medical compliance reviewer. Review this clinical brief. If it contains dangerous assumptions or diagnoses without evidence, reply ONLY with 'UNSAFE'. Otherwise, reply 'SAFE'. Brief:{extracted_brief}"
         new_response = reviewer_llm.invoke(new_system_message)
 
         if "UNSAFE" in new_response.content:
@@ -131,8 +136,19 @@ if uploaded_files is not None:
             initial_state = {"messages": [("user", user_question)]}
 
             result = app.invoke(initial_state)
-            st.write("Final Clinical Brief")
-            st.write(result["clinical_brief"])
+            check = result.get("guardrail_passed")
+
+            if check == True:
+                st.success("Passed Medical Compliance")
+                st.write("Final Clinical Brief")
+                st.write(result["clinical_brief"])
+            else:
+                st.error("UNSAFE OUTPUT DETECTED: Blocked by Medical Guardrail.")
+                with st.expander("View Blocked Draft"):
+                    st.write(result["clinical_brief"])
+                
+
+            
 
 
 
