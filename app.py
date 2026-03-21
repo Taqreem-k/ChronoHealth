@@ -67,7 +67,9 @@ if uploaded_files is not None:
         description="Use this tool to search and retrieve the patient's medical history,past diagnoses, lab results and general health records.",
     )
 
+    # Defining LLMs
     llm = ChatGroq(model_name = "llama-3.1-8b-instant")
+    reviewer_llm = ChatGroq(model_name = "llama-3.1-8b-instant")
     llm_with_tools = llm.bind_tools([retriever_tool])
 
 
@@ -82,6 +84,27 @@ if uploaded_files is not None:
             "messages": [response],
         }
     
+    # Defining a guardrail checker to prevent hallucinations
+    def compliance_checker(state: AgentState):
+        
+        new_system_message = SystemMessage(content=f"You are a medical compliance reviewer. Review this clinical brief. If it contains dangerous assumptions or diagnoses without evidence, reply ONLY with 'UNSAFE'. Otherwise, reply 'SAFE'. Brief:{state["clinical_brief"]}")
+        new_response = reviewer_llm.invoke(new_system_message)
+
+        if "UNSAFE" in new_response.content:
+            return {"guardrail_passed": False}
+        else:
+            return {"guardrail_passed": True}
+
+    # Defining a routing function
+    def route_after_drafter(state: AgentState):
+        last_message= state["messages"][-1]
+
+        if last_message.tool_calls:
+            return "tools"
+        else:
+            return "guardrail"
+
+
     tool_executer = ToolNode(tools=[retriever_tool])
 
     # Initializing Graph to add nodes and edges
@@ -89,11 +112,13 @@ if uploaded_files is not None:
 
     workflow.add_node("drafter", clinical_drafter)
     workflow.add_node("tools", tool_executer)
+    workflow.add_node("guardrail", compliance_checker)
 
     workflow.set_entry_point("drafter")
 
-    workflow.add_conditional_edges("drafter",tools_condition)
+    workflow.add_conditional_edges("drafter",route_after_drafter)
     workflow.add_edge("tools","drafter")
+    workflow.add_edge("guardrail", END)
 
     app = workflow.compile()
 
