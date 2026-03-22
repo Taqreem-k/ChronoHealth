@@ -6,21 +6,34 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_classic.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-from typing import TypedDict, Annotated
+from typing import TypedDict, Annotated, List
 from langchain_core.tools.retriever import create_retriever_tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_core.messages import SystemMessage
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+import json
 
 load_dotenv()
+
+# Defining Medical Record Schema
+class MedicalRecord(BaseModel):
+    date: str = Field(description="Date of the record, Use 'Unknown' if not found.")
+    metric: str = Field(description="The medical metric, vital sign, symption or medication")
+    value: str = Field(description="The measurement, dosage, or status")
+
+# Defining Patient History Schema
+class PatientHistory(BaseModel):
+    records: List[MedicalRecord]
 
 
 st.title("ChronoHealth")
 st.header("About:")
 st.subheader("ChronoHealth is an Agentic Personal Health Record System")
+
 
 # Defining LLMs
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
@@ -52,6 +65,13 @@ if uploaded_files is not None:
         )
         vision_response = llm.invoke([message])
         pages = [Document(page_content=vision_response.content)]
+
+    full_text = "\n".join([page.page_content for page in pages])
+    structured_llm = llm.with_structured_output(PatientHistory)
+    extracted_data = structured_llm.invoke(f"Extract all the medical data from this text: {full_text}")
+    
+    with st.expander("View Structured Databse Entry"):
+        st.json(extracted_data.dict())
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size = 1000, chunk_overlap=200)
     chunks = text_splitter.split_documents(pages)
