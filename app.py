@@ -1,4 +1,7 @@
 import streamlit as st
+import base64
+from langchain_core.messages import HumanMessage
+from langchain_core.documents import Document
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_classic.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
@@ -19,20 +22,36 @@ st.title("ChronoHealth")
 st.header("About:")
 st.subheader("ChronoHealth is an Agentic Personal Health Record System")
 
+# Defining LLMs
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+reviewer_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+
 # File Uploader to PDF
 uploaded_files = st.file_uploader(
-    "Upload PDF", type = ["pdf"]
+    "Upload File", type = ["pdf","png","jpg","jpeg"]
 )
 
 # Document Ingestion
 if uploaded_files is not None:
     st.success("File successfully uploaded!")
 
-    with open("temp.pdf", "wb") as f:
-        f.write(uploaded_files.getvalue())
-    
-    loader = PyPDFLoader("temp.pdf")
-    pages = loader.load()
+    if uploaded_files.name.endswith(".pdf"):
+        with open("temp.pdf", "wb") as f:
+            f.write(uploaded_files.getvalue())
+        
+        loader = PyPDFLoader("temp.pdf")
+        pages = loader.load()
+
+    else:
+        image_data = base64.b64encode(uploaded_files.getvalue()).decode("utf-8")
+        message = HumanMessage(
+            content=[
+                {"type": "text", "text": "Transcribe this medical docuemtn exactly as written. Do not add any extra commentary. Just extract the text and medica values."},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}}
+            ]
+        )
+        vision_response = llm.invoke([message])
+        pages = [Document(page_content=vision_response.content)]
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size = 1000, chunk_overlap=200)
     chunks = text_splitter.split_documents(pages)
@@ -57,8 +76,9 @@ if uploaded_files is not None:
         context: str
         clinical_brief: str
         guardrail_passed: bool
-    
+
     retriever = vectorstore.as_retriever(search_kwargs = {"k": 2})
+    
 
     # Wrapping retirever in a Tool for LLM usage
     retriever_tool = create_retriever_tool(
@@ -67,11 +87,7 @@ if uploaded_files is not None:
         description="Use this tool to search and retrieve the patient's medical history,past diagnoses, lab results and general health records.",
     )
 
-    # Defining LLMs
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
-    reviewer_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
     llm_with_tools = llm.bind_tools([retriever_tool])
-
 
     # Defining clinical brief based on user queries and retireved data
     def clinical_drafter(state: AgentState):
@@ -88,7 +104,7 @@ if uploaded_files is not None:
             "clinical_brief": clean_text,
             "messages": [response],
         }
-    
+
     # Defining a guardrail checker to prevent hallucinations
     def compliance_checker(state: AgentState):
         extracted_brief = state["clinical_brief"]
@@ -140,15 +156,19 @@ if uploaded_files is not None:
 
             if check == True:
                 st.success("Passed Medical Compliance")
+                with st.expander("View Agent Audit Trail"):
+                    for msg in result["messages"]:
+                        if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                            st.write(f"Agent used tool: {msg.tool_calls[0]['name']}")
                 st.write("Final Clinical Brief")
                 st.write(result["clinical_brief"])
             else:
                 st.error("UNSAFE OUTPUT DETECTED: Blocked by Medical Guardrail.")
                 with st.expander("View Blocked Draft"):
                     st.write(result["clinical_brief"])
-                
-
-            
+                        
+        
+                    
 
 
 
