@@ -48,56 +48,70 @@ uploaded_files = st.file_uploader(
 if uploaded_files is not None:
     st.success("File successfully uploaded!")
 
-    if uploaded_files.name.endswith(".pdf"):
-        with open("temp.pdf", "wb") as f:
-            f.write(uploaded_files.getvalue())
-        
-        loader = PyPDFLoader("temp.pdf")
-        pages = loader.load()
-
-    else:
-        image_data = base64.b64encode(uploaded_files.getvalue()).decode("utf-8")
-        message = HumanMessage(
-            content=[
-                {"type": "text", "text": "Transcribe this medical docuemtn exactly as written. Do not add any extra commentary. Just extract the text and medica values."},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}}
-            ]
-        )
-        vision_response = llm.invoke([message])
-        pages = [Document(page_content=vision_response.content)]
-
-    full_text = "\n".join([page.page_content for page in pages])
-    structured_llm = llm.with_structured_output(PatientHistory)
-    extracted_data = structured_llm.invoke(f"Extract all the medical data from this text: {full_text}")
-    
-    with st.expander("View Structured Databse Entry"):
-        st.json(extracted_data.dict())
-
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size = 1000, chunk_overlap=200)
-    chunks = text_splitter.split_documents(pages)
-
-    st.write(f"Document succesfully split into {len(chunks)} chunks.")
-
-
     embeddings = HuggingFaceEmbeddings(model_name = "all-MiniLm-L6-v2")
 
-    # Storing Embeddings to local Chroma vector database
-    vectorstore = Chroma.from_documents(
-        documents = chunks,
-        embedding = embeddings,
-        persist_directory="./chroma_db"
-    )
+    if st.session_state.get("processed_file_name") != uploaded_files.name:
 
-    st.success("Health record successfully vectorized and stored in the database!")
+        with st.spinner("Processing document..."):
+            
+            if uploaded_files.name.endswith(".pdf"):
+                with open("temp.pdf", "wb") as f:
+                    f.write(uploaded_files.getvalue())
+                
+                loader = PyPDFLoader("temp.pdf")
+                pages = loader.load()
+
+            else:
+                image_data = base64.b64encode(uploaded_files.getvalue()).decode("utf-8")
+                message = HumanMessage(
+                    content=[
+                        {"type": "text", "text": "Transcribe this medical docuemtn exactly as written. Do not add any extra commentary. Just extract the text and medica values."},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}}
+                    ]
+                )
+                vision_response = llm.invoke([message])
+                pages = [Document(page_content=vision_response.content)]
+
+        full_text = "\n".join([page.page_content for page in pages])
+        structured_llm = llm.with_structured_output(PatientHistory)
+        
+        if "structured_db" not in st.session_state:
+            extracted_data = structured_llm.invoke(f"Extract all the medical data from this text: {full_text}")
+            st.session_state.structured_db = extracted_data.dict()
+
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size = 1000, chunk_overlap=200)
+        chunks = text_splitter.split_documents(pages)
+
+        st.write(f"Document succesfully split into {len(chunks)} chunks.")
+
+
+
+        # Storing Embeddings to local Chroma vector database
+        vectorstore = Chroma.from_documents(
+            documents = chunks,
+            embedding = embeddings,
+            persist_directory="./chroma_db"
+        )
+
+        st.success("Health record successfully vectorized and stored in the database!")
+
+        st.session_state.processed_file_name = uploaded_files.name
+
+
+    with st.expander("View Structured Databse Entry"):
+                st.json(st.session_state.structured_db)
+
+    vectorstore = Chroma(persist_directory="./chroma_db", embedding_function = embeddings)
+    retriever = vectorstore.as_retriever(search_kwargs = {"k": 4})
+
 
     # Defining GraphState schema
     class AgentState(TypedDict):
         messages: Annotated[list, add_messages]
+        structured_data: dict
         context: str
         clinical_brief: str
         guardrail_passed: bool
-
-    retriever = vectorstore.as_retriever(search_kwargs = {"k": 2})
     
 
     # Wrapping retirever in a Tool for LLM usage
@@ -111,7 +125,9 @@ if uploaded_files is not None:
 
     # Defining clinical brief based on user queries and retireved data
     def clinical_drafter(state: AgentState):
-        system_message = SystemMessage(content="You are the ChronoHealth AI Assistant. You Must use the 'patient_history_search' tool to answer any questions about the user's uploaded document. Never answer from general knowledge.")
+        structured_str = json.dumps(state.get('structured_data',{}), indent = 2)
+        system_prompt = f"""You are the ChronoHealth AI Assistant. First, review this highly accurate structured data extracted from the patient's file: {structured_str}. If the user's question can be answered using the structured data above, use it immediately. If you need more context, raw clinical notes, or if the data is missing, you may use the 'patient_history_search' tool to search the vector database. Provide accurate, direct answers based on these sources."""
+        system_message = SystemMessage(content=system_prompt)
         messages_to_pass = [system_message] + state["messages"]
         response = llm_with_tools.invoke(messages_to_pass)
 
@@ -169,7 +185,8 @@ if uploaded_files is not None:
 
     if user_question:
         with st.spinner("Agent is searching records and drafting brief..."):
-            initial_state = {"messages": [("user", user_question)]}
+            initial_state = {"messages": [("user", user_question)],
+                            "structured_data": st.session_state.get("structured_db",{})}
 
             result = app.invoke(initial_state)
             check = result.get("guardrail_passed")
