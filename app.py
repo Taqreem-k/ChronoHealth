@@ -234,8 +234,7 @@ else:
         with tab2:
             for msg in result["messages"]:
                     if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                        st.write(f"Agent used tool: {msg.tool_calls[0]['name']}")
-                    
+                        st.write(f"Agent used tool: {msg.tool_calls[0]['name']}")      
     
                 
 
