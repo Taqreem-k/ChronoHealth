@@ -43,11 +43,11 @@ Powered by **LangGraph**, the system is fully auditable. Doctors can see exactly
 
 ---
 
-##  System Architecture
+## System Architecture
 
 Our deterministic state machine ensures that data always flows through our safety checks before reaching the clinician. 
 
-*(Architecture Diagram coming soon)*
+![ChronoHealth Architecture Diagram](assets/architecture.png)
 
 ---
 
